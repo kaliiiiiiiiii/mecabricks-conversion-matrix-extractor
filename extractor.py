@@ -36,9 +36,9 @@ async def get_brick(my_id: int, lang: str = "en", scope: str = "official", max_r
     async with aiohttp.ClientSession() as s:
         resp = await s.post('https://www.mecabricks.com/api/part-manager/parts/get', headers=headers, data=data)
     if resp.status != 200:
+        print(await resp.text(encoding="utf-8"))
         if resp.status == 429:
             raise IPBannedException()
-        print(await resp.text(encoding="utf-8"))
         raise AssertionError(f"got status of {resp.status}")
     try:
         return json.loads(await resp.text(encoding="utf-8"))

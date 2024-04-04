@@ -1,14 +1,20 @@
-from extractor import *
+import asyncio
+import json
 
-from timer import Timer
+from extractor import get_bricks
+import time
 
-my_timer = Timer()
 
-print(get_brick(1))
+async def main():
+    start = time.perf_counter()
+    _range = range(1, 19900)
+    bricks = await get_bricks(_range, max_conn=3, lang="en", scope="official")
+    print("requests/sec. = " + str(
+        (_range.stop - _range.start) /
+        (time.perf_counter() - start)
+    ))
+    with open("file.json", "w+") as f:
+        f.write(json.dumps(bricks))
 
-my_timer.start()
-my_range = range(1, 19900)
-get_threaded(my_range, n_threads=2,
-             file_name="export.json")  # 11.7 requests/sec. || 0.75 Mbit/s || ca. 5.75 requests/sec. per thread
-time = my_timer.stop()
-print("requests/sec. = " + str((my_range.stop - my_range.start) / time))
+
+asyncio.run(main())

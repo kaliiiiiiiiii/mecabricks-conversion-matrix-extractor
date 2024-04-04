@@ -1,12 +1,16 @@
+import asyncio
 import json
-import threading
 import traceback
 import warnings
 
-import requests
+import aiohttp
 
 
-def get_brick(my_id: int, proxy: dict = None, lang: str = "en", scope: str = "official"):
+class IPBannedException(Exception):
+    pass
+
+
+async def get_brick(my_id: int, lang: str = "en", scope: str = "official", max_retries=5, retrie_timeout=0.5, lock=asyncio.Lock()):
     headers = {
         'authority': 'www.mecabricks.com',
         'accept': '*/*',
@@ -29,25 +33,24 @@ def get_brick(my_id: int, proxy: dict = None, lang: str = "en", scope: str = "of
         'id': str(my_id),
         'lang': lang,
     }
-    if proxy:
-        response = requests.post('https://www.mecabricks.com/api/part-manager/parts/get', headers=headers, data=data,
-                                 proxies=proxy)
-    else:
-        response = requests.post('https://www.mecabricks.com/api/part-manager/parts/get', headers=headers, data=data)
-    status_code = response.status_code
+    async with aiohttp.ClientSession() as s:
+        resp = await s.post('https://www.mecabricks.com/api/part-manager/parts/get', headers=headers, data=data)
+    if resp.status != 200:
+        if resp.status == 429:
+            raise IPBannedException()
+        print(await resp.text(encoding="utf-8"))
+        raise AssertionError(f"got status of {resp.status}")
     try:
-        content = json.loads(response.content.decode())
-    except json.decoder.JSONDecodeError:
-        # noinspection PyUnresolvedReferences
-        input("Response status code was: " + str(
-            status_code) + "\n" + response.content.decode() + "\n, press ENTER to continue\n")
-        content = {"status": str(status_code)}
-    finally:
-        if status_code != 200:
-            input("Response status code was: " + str(
-                status_code) + "\n" + response.content.decode() + "\n, press ENTER to continue\n")
-            content = {"status": str(status_code)}
-    return content
+        return json.loads(await resp.text(encoding="utf-8"))
+    except aiohttp.ContentTypeError as e:
+        print(await resp.text())
+        raise e
+    except (aiohttp.ClientConnectorError,aiohttp.ClientOSError) as e:
+        if max_retries == 1:
+            raise e
+        async with lock:
+            await asyncio.sleep(retrie_timeout)
+        return get_brick(my_id, lang, scope, max_retries - 1)
 
 
 # noinspection PyUnresolvedReferences
@@ -68,46 +71,31 @@ def parse_brick(content: object):
                               "c": content['data']['part']['ldraw']['convertible']}}
     else:
         print(content)
-        res = {}
+        res = None
     return res
 
 
-def threaded_helper(my_range: range, thread_n: int = 0, proxy: dict = None,
-                    file_name="export.json"):
-    for i in my_range:
-        res = get_brick(i + thread_n, proxy=proxy)
-        parsed = parse_brick(res)
-        if parsed:
-            with open(str(thread_n) + "_" + file_name, "a") as my_file:
-                my_file.write("," + json.dumps(parsed)[1:-1])
+async def get_bricks(my_range: range, max_conn=1000, lang: str = "en", scope: str = "official", max_retries=5,
+                     retrie_timeout=0.5):
+    sema = asyncio.Semaphore(max_conn)
+    lock = asyncio.Lock()
+
+    async def get_brick_helper(_id):
+        async with sema as _:
+            try:
+                return await get_brick(_id, lang=lang, scope=scope, max_retries=max_retries,
+                                       retrie_timeout=retrie_timeout, lock=lock)
+            except (AssertionError, aiohttp.ClientConnectorError,aiohttp.ClientOSError):
+                traceback.print_exc()
+
+    coro = []
+    for _id in my_range:
+        coro.append(get_brick_helper(_id))
+    return await asyncio.gather(*coro)
 
 
-def get_threaded(my_range: range, proxy: dict = None, file_name="export.json", n_threads=2):
-    threads = []
-    for i in range(n_threads):
-        thread = threading.Thread(target=threaded_helper, kwargs={
-            "my_range": range(my_range.start, my_range.stop, n_threads),
-            "thread_n": i,
-            "proxy": proxy,
-            "file_name": file_name
-        })
-        thread.start()
-        threads.append(thread)
-    for my_thread in threads:
-        my_thread.join()
-
-
-def get_bricks(my_range: range, proxy: dict = None, file_name="export.json"):
-    for i in my_range:
-        res = get_brick(i, proxy=proxy)
-        parsed = parse_brick(res)
-        if parsed:
-            with open(file_name, "a") as my_file:
-                my_file.write("," + json.dumps(parsed)[1:-1])
-
-
-def search_brick(query: str, page: int = 1, proxy: dict = None, lang: str = "en", hidden: bool = True,
-                 scope: str = 'official'):
+async def search_brick(query: str, page: int = 1, lang: str = "en", hidden: bool = True,
+                       scope: str = 'official'):
     headers = {
         'authority': 'www.mecabricks.com',
         'accept': '*/*',
@@ -135,24 +123,14 @@ def search_brick(query: str, page: int = 1, proxy: dict = None, lang: str = "en"
         'hidden': json.dumps(hidden),
         'lang': lang,
     }
-    if proxy:
-        response = requests.post('https://www.mecabricks.com/api/part-manager/parts/search',
-                                 headers=headers, data=data, proxies=proxy)
-    else:
-        response = requests.post('https://www.mecabricks.com/api/part-manager/parts/search',
-                                 headers=headers, data=data)
-
-    try:
-        content = json.loads(response.content.decode())
-    except json.decoder.JSONDecodeError:
-        content = {"status": "failed_decode_json: Query='" + query + "'"}
-        traceback.print_exc()
-    return content
+    async with aiohttp.ClientSession() as s:
+        resp = await s.post('https://www.mecabricks.com/api/part-manager/parts/search',
+                            headers=headers, data=data)
+    return json.loads(await resp.text(encoding="utf-8"))
 
 
-# noinspection PyTypeChecker
-def brick_by_number(number: str, proxy: dict = None):
-    search = search_brick(number, proxy=proxy)
+async def brick_by_number(number: str):
+    search = await search_brick(number)
     item_len = len(search["data"]["items"])
     if search["status"] == "pass":
         if item_len < 1:

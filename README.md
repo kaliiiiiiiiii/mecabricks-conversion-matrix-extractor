@@ -14,38 +14,37 @@
 
 ### Installing
 
-* ```pip install requests```
-* download `extractor.py` and `timer.py` to your local directory
+* ```pip install aiohttp```
+* download `extractor.py` to your local directory
 
 ### Example script
 
 ```python
-from extractor import *
+import asyncio
+import json
 
-from timer import Timer
+from extractor import get_bricks
+import time
 
-my_timer = Timer()
 
-print(get_brick(1))
+async def main():
+    start = time.perf_counter()
+    _range = range(1, 19900)
+    bricks = await get_bricks(_range, max_conn=100, lang="en", scope="official")
+    print("requests/sec. = " + str(
+        (_range.stop - _range.start) /
+        (time.perf_counter() - start)
+    ))
+    with open("file.json") as f:
+        f.write(json.dumps(bricks))
 
-my_timer.start()
-my_range = range(1, 19900)
 
-get_threaded(my_range, n_threads=2,
-             file_name="export.json")  # 11.7 requests/sec. || 0.75 Mbit/s || ca. 5.75 requests/sec. per thread
-# this will create 2 files => 1_export.json, 2_export.json
-
-time = my_timer.stop()
-print("requests/sec. = " + str((my_range.stop - my_range.start) / time))
+asyncio.run(main())
 ```
 
 ## Help
 
 Please feel free to open an issue or fork!
-
-## Todo
-
-## Deprecated
 
 ## Authors
 
@@ -68,10 +67,5 @@ This work is licensed under a
 
 ## Disclaimer
 
-I am not responsible what you use the code for!!! Also no warranty!
+I am not responsible for what you use the code for!!! Also no warranty!
 
-## Acknowledgments
-
-Inspiration, code snippets, etc.
-
-* [Timer](https://www.nickmccullum.com/python-timer-functions-performance-measurement/)
